@@ -22,9 +22,9 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         # 1. Set Render Engine to Eevee (Optimized for speed in data prep)
         scene.render.engine = 'BLENDER_EEVEE'
 
-        # 2. Set Resolution to 1024x1024 (Standard for AI datasets)
-        scene.render.resolution_x = 1024
-        scene.render.resolution_y = 1024
+        # 2. Set Resolution to 2048x2048 (Standard for AI datasets)
+        scene.render.resolution_x = 2048
+        scene.render.resolution_y = 2048
         scene.render.resolution_percentage = 100
 
         # 3. Set Color Management to Standard
@@ -36,9 +36,12 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         scene.view_settings.gamma = 1.0
 
         # 4. Set Output Format to PNG RGBA
-        scene.render.image_settings.file_format = 'PNG'
-        scene.render.image_settings.color_mode = 'RGBA'
-        scene.render.image_settings.color_depth = '8'
+        scene.render.image_settings.file_format = 'OPEN_EXR'  # Use OpenEXR for lossless RGBA output
+        scene.render.image_settings.color_mode = 'RGBA' # Ensure alpha channel is included
+        scene.render.image_settings.color_depth = '32' # Use 32-bit for maximum precision in AI data prep
+        #TODO add codec DWAB, Quality 90%
+        scene.render.image_settings.quality = 100
+        scene.render.image_settings.exr_codec = 'DWAB'
 
         # 5. Setup World Background (Pure Green Screen)
         if not scene.world:
