@@ -91,11 +91,8 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
         if "BG" not in scene.view_layers:
             scene.view_layers.new(name="BG")
         
-        # 2. Enable Compositing Nodes
-        scene.use_nodes = True
-        
-        # Blender 5.0 API: node_tree is removed from Scene, replaced by compositing_node_group.
-        # We ensure it is initialized programmatically if use_nodes didn't create it.
+        # 2. Access Compositing Node Group (Blender 5.0 API)
+        # The compositor is active if a node group is assigned; use_nodes is deprecated.
         tree = scene.compositing_node_group
         if tree is None:
             # Initialize a new compositor node group and assign it to the scene
@@ -133,13 +130,13 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
         # 5. Setup Individual File Output Nodes for each directory
         # This ensures the OS-level folder structure is respected in 5.0.1
         passes = [
-            ("Input", rl_input.outputs['Image'], (600, 400)),
-            ("FG", rl_fg.outputs['Image'], (600, 150)),
-            ("BG", rl_bg.outputs['Image'], (600, -100)),
-            ("Alpha", rl_input.outputs['Alpha'], (600, -350))
+            ("Input", rl_input.outputs['Image'], (600, 400), "RGBA"),
+            ("FG", rl_fg.outputs['Image'], (600, 150), "RGBA"),
+            ("BG", rl_bg.outputs['Image'], (600, -100), "RGBA"),
+            ("Alpha", rl_input.outputs['Alpha'], (600, -350), "FLOAT")
         ]
 
-        for pass_name, output_socket, loc in passes:
+        for pass_name, output_socket, loc, socket_type in passes:
             # Create sub-directory physically
             os.makedirs(os.path.join(clip_path, pass_name), exist_ok=True)
             
@@ -159,10 +156,10 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
             node.format.color_depth = '32'
             node.format.color_mode = 'RGBA'
             
-            # In 5.0, the first item is created by default. 
-            # We update its name to match the pass for clarity in the UI.
-            if node.file_output_items:
-                node.file_output_items[0].name = pass_name
+            # Blender 5.0 API: Ensure socket_type matches the source data exactly
+            # to avoid "Conversion is not supported" errors.
+            node.file_output_items.clear()
+            node.file_output_items.new(socket_type, name=pass_name)
             
             links.new(output_socket, node.inputs[0])
 
