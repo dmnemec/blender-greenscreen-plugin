@@ -32,7 +32,7 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         scene.render.resolution_y = 2048
         scene.render.resolution_percentage = 100
 
-        # 3. Set Color Management to Standard
+        # 4. Set Color Management to Standard
         # This ensures that the green background is rendered as pure (0, 1, 0)
         scene.display_settings.display_device = 'sRGB'
         scene.view_settings.view_transform = 'Standard'
@@ -40,14 +40,14 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         scene.view_settings.exposure = 0.0
         scene.view_settings.gamma = 1.0
 
-        # 4. Set Output Format to PNG RGBA
-        scene.render.image_settings.file_format = 'OPEN_EXR'  # Use OpenEXR for lossless RGBA output
+        # 5. Set Output Format to OpenEXR RGBA
+        scene.render.image_settings.file_format = 'OPEN_EXR'  # Use OpenEXR for high-bit depth output
         scene.render.image_settings.color_mode = 'RGBA' # Ensure alpha channel is included
         scene.render.image_settings.color_depth = '32' # Use 32-bit for maximum precision in AI data prep
         scene.render.image_settings.quality = 90 # DWAB compression quality
         scene.render.image_settings.exr_codec = 'DWAB'
 
-        # 5. Setup World Background (Pure Green Screen)
+        # 6. Setup World Background (Pure Green Screen)
         if not scene.world:
             new_world = bpy.data.worlds.new("GreenscreenWorld")
             scene.world = new_world
@@ -65,7 +65,7 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         links = scene.world.node_tree.links
         links.new(node_background.outputs[0], node_output.inputs[0])
 
-        # 6. Disable Film Transparency to ensure the green background renders
+        # 7. Disable Film Transparency to ensure the green background renders
         scene.render.film_transparent = False
 
         self.report({'INFO'}, "Greenscreen AI Data Prep settings applied.")
@@ -135,34 +135,34 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
         file_output.location = (600, 100)
         # Blender 5.0 API: base_path renamed to directory
         file_output.directory = "//" + clip_name + "/"
+        # Set file_name to empty so it doesn't prefix our sub-folder paths
+        file_output.file_name = ""
         
-        # Ensure node uses styleguide EXR settings
+        # Ensure node uses styleguide EXR settings explicitly
+        file_output.format.file_format = 'OPEN_EXR_MULTILAYER'
         file_output.format.file_format = 'OPEN_EXR'
         file_output.format.exr_codec = 'DWAB'
         file_output.format.color_depth = '32'
+        file_output.format.color_mode = 'RGBA'
         
         # 6. Configure File Output Slots (Styleguide Directory Structure)
         # Blender 5.0 API: file_slots removed, replaced by file_output_items
         file_output.file_output_items.clear()
         
         # Input/ (Foreground on greenscreen)
-        item_input = file_output.file_output_items.new("Input")
-        item_input.path = "Input/render_"
+        file_output.file_output_items.new("RGBA", name="Input/render_")
         links.new(rl_input.outputs['Image'], file_output.inputs[0])
         
         # FG/ (Foreground on black/neutral)
-        item_fg = file_output.file_output_items.new("FG")
-        item_fg.path = "FG/render_"
+        file_output.file_output_items.new("RGBA", name="FG/render_")
         links.new(rl_fg.outputs['Image'], file_output.inputs[1])
         
         # BG/ (Background only)
-        item_bg = file_output.file_output_items.new("BG")
-        item_bg.path = "BG/render_"
+        file_output.file_output_items.new("RGBA", name="BG/render_")
         links.new(rl_bg.outputs['Image'], file_output.inputs[2])
 
         # Alpha/ (Foreground alpha only)
-        item_alpha = file_output.file_output_items.new("Alpha")
-        item_alpha.path = "Alpha/render_"
+        file_output.file_output_items.new("RGBA", name="Alpha/render_")
         # We pull Alpha from the main Input layer
         links.new(rl_input.outputs['Alpha'], file_output.inputs[3])
 
