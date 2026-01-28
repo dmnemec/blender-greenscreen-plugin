@@ -2,7 +2,7 @@ bl_info = {
     "name": "Greenscreen AI Data Prep",
     "author": "Gemini Code Assist",
     "version": (1, 0),
-    "blender": (2, 80, 0),
+    "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Greenscreen",
     "description": "Initial settings for Greenscreen AI Data Prep project",
     "category": "System",
@@ -27,7 +27,7 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         scene.frame_start = 1
         scene.frame_end = 48
 
-        # 2. Set Resolution to 2048x2048 (Standard for AI datasets)
+        # 3. Set Resolution to 2048x2048 (Standard for AI datasets)
         scene.render.resolution_x = 2048
         scene.render.resolution_y = 2048
         scene.render.resolution_percentage = 100
@@ -93,10 +93,16 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
         
         # 2. Enable Compositing Nodes
         scene.use_nodes = True
-        tree = scene.node_tree
+        
+        # Blender 5.0 API: node_tree is removed from Scene, replaced by compositing_node_group
+        tree = getattr(scene, "compositing_node_group", None)
+        if not tree:
+            self.report({'ERROR'}, "Compositor node group not found. Ensure 'Use Nodes' is enabled.")
+            return {'CANCELLED'}
+            
         nodes = tree.nodes
         links = tree.links
-        nodes.clear() # Reset tree for clean setup
+        nodes.clear()
         
         # 3. Create Render Layer Nodes for each pass
         rl_input = nodes.new('CompositorNodeRLayers')
@@ -117,37 +123,44 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
         while os.path.exists(os.path.join(base_dir, f"Clip{clip_index:04d}")):
             clip_index += 1
         clip_name = f"Clip{clip_index:04d}"
+        
+        # Physically create the directory structure to avoid render errors
+        clip_path = os.path.join(base_dir, clip_name)
+        os.makedirs(clip_path, exist_ok=True)
 
         # 5. Setup File Output Node
         file_output = nodes.new('CompositorNodeOutputFile')
         file_output.location = (600, 100)
-        file_output.base_path = "//" + clip_name + "/"
+        # Blender 5.0 API: base_path renamed to directory
+        file_output.directory = "//" + clip_name + "/"
+        
         # Ensure node uses styleguide EXR settings
         file_output.format.file_format = 'OPEN_EXR'
         file_output.format.exr_codec = 'DWAB'
         file_output.format.color_depth = '32'
         
         # 6. Configure File Output Slots (Styleguide Directory Structure)
-        file_output.file_slots.clear()
+        # Blender 5.0 API: file_slots removed, replaced by file_output_items
+        file_output.file_output_items.clear()
         
         # Input/ (Foreground on greenscreen)
-        file_output.file_slots.new("Input")
-        file_output.file_slots[0].path = "Input/render_"
+        item_input = file_output.file_output_items.new("Input")
+        item_input.path = "Input/render_"
         links.new(rl_input.outputs['Image'], file_output.inputs[0])
         
         # FG/ (Foreground on black/neutral)
-        file_output.file_slots.new("FG")
-        file_output.file_slots[1].path = "FG/render_"
+        item_fg = file_output.file_output_items.new("FG")
+        item_fg.path = "FG/render_"
         links.new(rl_fg.outputs['Image'], file_output.inputs[1])
         
         # BG/ (Background only)
-        file_output.file_slots.new("BG")
-        file_output.file_slots[2].path = "BG/render_"
+        item_bg = file_output.file_output_items.new("BG")
+        item_bg.path = "BG/render_"
         links.new(rl_bg.outputs['Image'], file_output.inputs[2])
 
         # Alpha/ (Foreground alpha only)
-        file_output.file_slots.new("Alpha")
-        file_output.file_slots[3].path = "Alpha/render_"
+        item_alpha = file_output.file_output_items.new("Alpha")
+        item_alpha.path = "Alpha/render_"
         # We pull Alpha from the main Input layer
         links.new(rl_input.outputs['Alpha'], file_output.inputs[3])
 
