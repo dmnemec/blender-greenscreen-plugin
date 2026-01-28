@@ -9,6 +9,7 @@ bl_info = {
 }
 
 import bpy
+import os
 
 class GREENSCREEN_OT_setup(bpy.types.Operator):
     """Configure initial settings for Greenscreen AI Data Prep"""
@@ -21,6 +22,10 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
 
         # 1. Set Render Engine to Eevee (Optimized for speed in data prep)
         scene.render.engine = 'BLENDER_EEVEE'
+
+        # 2. Set Frame Range (Exactly 48 frames per styleguide)
+        scene.frame_start = 1
+        scene.frame_end = 48
 
         # 2. Set Resolution to 2048x2048 (Standard for AI datasets)
         scene.render.resolution_x = 2048
@@ -39,8 +44,7 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         scene.render.image_settings.file_format = 'OPEN_EXR'  # Use OpenEXR for lossless RGBA output
         scene.render.image_settings.color_mode = 'RGBA' # Ensure alpha channel is included
         scene.render.image_settings.color_depth = '32' # Use 32-bit for maximum precision in AI data prep
-        #TODO add codec DWAB, Quality 90%
-        scene.render.image_settings.quality = 100
+        scene.render.image_settings.quality = 90 # DWAB compression quality
         scene.render.image_settings.exr_codec = 'DWAB'
 
         # 5. Setup World Background (Pure Green Screen)
@@ -67,6 +71,101 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         self.report({'INFO'}, "Greenscreen AI Data Prep settings applied.")
         return {'FINISHED'}
 
+class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
+    """Setup render passes and output nodes for export"""
+    bl_idname = "greenscreen.setup_passes"
+    bl_label = "Setup Render Passes"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        scene = context.scene
+
+        # 0. Check if file is saved to determine base path
+        if not bpy.data.is_saved:
+            self.report({'WARNING'}, "Save your .blend file first to enable automatic folder incrementing.")
+            return {'CANCELLED'}
+        
+        # 1. Ensure View Layers exist for specific passes
+        if "FG" not in scene.view_layers:
+            scene.view_layers.new(name="FG")
+        if "BG" not in scene.view_layers:
+            scene.view_layers.new(name="BG")
+        
+        # 2. Enable Compositing Nodes
+        scene.use_nodes = True
+        tree = scene.node_tree
+        nodes = tree.nodes
+        links = tree.links
+        nodes.clear() # Reset tree for clean setup
+        
+        # 3. Create Render Layer Nodes for each pass
+        rl_input = nodes.new('CompositorNodeRLayers')
+        rl_input.layer = "ViewLayer"
+        rl_input.location = (0, 400)
+        
+        rl_fg = nodes.new('CompositorNodeRLayers')
+        rl_fg.layer = "FG"
+        rl_fg.location = (0, 100)
+        
+        rl_bg = nodes.new('CompositorNodeRLayers')
+        rl_bg.layer = "BG"
+        rl_bg.location = (0, -200)
+        
+        # 4. Determine next Clip folder name (Automatic Increment)
+        base_dir = os.path.dirname(bpy.data.filepath)
+        clip_index = 1
+        while os.path.exists(os.path.join(base_dir, f"Clip{clip_index:04d}")):
+            clip_index += 1
+        clip_name = f"Clip{clip_index:04d}"
+
+        # 5. Setup File Output Node
+        file_output = nodes.new('CompositorNodeOutputFile')
+        file_output.location = (600, 100)
+        file_output.base_path = "//" + clip_name + "/"
+        # Ensure node uses styleguide EXR settings
+        file_output.format.file_format = 'OPEN_EXR'
+        file_output.format.exr_codec = 'DWAB'
+        file_output.format.color_depth = '32'
+        
+        # 6. Configure File Output Slots (Styleguide Directory Structure)
+        file_output.file_slots.clear()
+        
+        # Input/ (Foreground on greenscreen)
+        file_output.file_slots.new("Input")
+        file_output.file_slots[0].path = "Input/render_"
+        links.new(rl_input.outputs['Image'], file_output.inputs[0])
+        
+        # FG/ (Foreground on black/neutral)
+        file_output.file_slots.new("FG")
+        file_output.file_slots[1].path = "FG/render_"
+        links.new(rl_fg.outputs['Image'], file_output.inputs[1])
+        
+        # BG/ (Background only)
+        file_output.file_slots.new("BG")
+        file_output.file_slots[2].path = "BG/render_"
+        links.new(rl_bg.outputs['Image'], file_output.inputs[2])
+
+        # Alpha/ (Foreground alpha only)
+        file_output.file_slots.new("Alpha")
+        file_output.file_slots[3].path = "Alpha/render_"
+        # We pull Alpha from the main Input layer
+        links.new(rl_input.outputs['Alpha'], file_output.inputs[3])
+
+        self.report({'INFO'}, f"Configured for {clip_name}")
+        return {'FINISHED'}
+
+class GREENSCREEN_OT_render_clip(bpy.types.Operator):
+    """Trigger the animation render for the current clip"""
+    bl_idname = "greenscreen.render_clip"
+    bl_label = "Render Animation Clip"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        # Triggers the render animation (Ctrl+F12)
+        bpy.ops.render.render(animation=True)
+        self.report({'INFO'}, "Render started. Check the Clip folder for output.")
+        return {'FINISHED'}
+
 class GREENSCREEN_PT_panel(bpy.types.Panel):
     """Panel for Greenscreen AI Data Prep"""
     bl_label = "Greenscreen AI Data Prep"
@@ -79,13 +178,23 @@ class GREENSCREEN_PT_panel(bpy.types.Panel):
         layout = self.layout
         layout.label(text="Project Initialization")
         layout.operator("greenscreen.setup_project", icon='PREFERENCES')
+        layout.separator()
+        layout.label(text="Export Configuration")
+        layout.operator("greenscreen.setup_passes", icon='RENDER_RESULT')
+        layout.separator()
+        layout.label(text="Execution")
+        layout.operator("greenscreen.render_clip", icon='RENDER_ANIMATION')
 
 def register():
     bpy.utils.register_class(GREENSCREEN_OT_setup)
+    bpy.utils.register_class(GREENSCREEN_OT_setup_passes)
+    bpy.utils.register_class(GREENSCREEN_OT_render_clip)
     bpy.utils.register_class(GREENSCREEN_PT_panel)
 
 def unregister():
     bpy.utils.unregister_class(GREENSCREEN_OT_setup)
+    bpy.utils.unregister_class(GREENSCREEN_OT_setup_passes)
+    bpy.utils.unregister_class(GREENSCREEN_OT_render_clip)
     bpy.utils.unregister_class(GREENSCREEN_PT_panel)
 
 if __name__ == "__main__":
