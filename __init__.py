@@ -130,41 +130,41 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
         clip_path = os.path.join(base_dir, clip_name)
         os.makedirs(clip_path, exist_ok=True)
 
-        # 5. Setup File Output Node
-        file_output = nodes.new('CompositorNodeOutputFile')
-        file_output.location = (600, 100)
-        # Blender 5.0 API: base_path renamed to directory
-        file_output.directory = "//" + clip_name + "/"
-        # Set file_name to empty so it doesn't prefix our sub-folder paths
-        file_output.file_name = ""
-        
-        # Ensure node uses styleguide EXR settings explicitly
-        file_output.format.file_format = 'OPEN_EXR_MULTILAYER'
-        file_output.format.file_format = 'OPEN_EXR'
-        file_output.format.exr_codec = 'DWAB'
-        file_output.format.color_depth = '32'
-        file_output.format.color_mode = 'RGBA'
-        
-        # 6. Configure File Output Slots (Styleguide Directory Structure)
-        # Blender 5.0 API: file_slots removed, replaced by file_output_items
-        file_output.file_output_items.clear()
-        
-        # Input/ (Foreground on greenscreen)
-        file_output.file_output_items.new("RGBA", name="Input/render_")
-        links.new(rl_input.outputs['Image'], file_output.inputs[0])
-        
-        # FG/ (Foreground on black/neutral)
-        file_output.file_output_items.new("RGBA", name="FG/render_")
-        links.new(rl_fg.outputs['Image'], file_output.inputs[1])
-        
-        # BG/ (Background only)
-        file_output.file_output_items.new("RGBA", name="BG/render_")
-        links.new(rl_bg.outputs['Image'], file_output.inputs[2])
+        # 5. Setup Individual File Output Nodes for each directory
+        # This ensures the OS-level folder structure is respected in 5.0.1
+        passes = [
+            ("Input", rl_input.outputs['Image'], (600, 400)),
+            ("FG", rl_fg.outputs['Image'], (600, 150)),
+            ("BG", rl_bg.outputs['Image'], (600, -100)),
+            ("Alpha", rl_input.outputs['Alpha'], (600, -350))
+        ]
 
-        # Alpha/ (Foreground alpha only)
-        file_output.file_output_items.new("RGBA", name="Alpha/render_")
-        # We pull Alpha from the main Input layer
-        links.new(rl_input.outputs['Alpha'], file_output.inputs[3])
+        for pass_name, output_socket, loc in passes:
+            # Create sub-directory physically
+            os.makedirs(os.path.join(clip_path, pass_name), exist_ok=True)
+            
+            # Create and configure node
+            node = nodes.new('CompositorNodeOutputFile')
+            node.name = f"Output_{pass_name}"
+            node.label = f"Export {pass_name}"
+            node.location = loc
+            
+            # Blender 5.0 API: directory is the folder, file_name is the prefix
+            node.directory = f"//{clip_name}/{pass_name}/"
+            node.file_name = "render_"
+            
+            # Set format to OPEN_EXR_MULTILAYER as per your environment's valid list
+            node.format.file_format = 'OPEN_EXR_MULTILAYER'
+            node.format.exr_codec = 'DWAB'
+            node.format.color_depth = '32'
+            node.format.color_mode = 'RGBA'
+            
+            # In 5.0, the first item is created by default. 
+            # We update its name to match the pass for clarity in the UI.
+            if node.file_output_items:
+                node.file_output_items[0].name = pass_name
+            
+            links.new(output_socket, node.inputs[0])
 
         self.report({'INFO'}, f"Configured for {clip_name}")
         return {'FINISHED'}
