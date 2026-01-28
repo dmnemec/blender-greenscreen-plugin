@@ -56,17 +56,30 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         nodes = scene.world.node_tree.nodes
         nodes.clear()
         
-        node_background = nodes.new(type='ShaderNodeBackground')
-        node_background.inputs[0].default_value = (0.0, 1.0, 0.0, 1.0)  # Pure Green
-        node_background.inputs[1].default_value = 1.0  # Strength
+        # World Shader Logic: Black for Camera, Gray for Bounce (Neutral Lighting)
+        node_lp = nodes.new(type='ShaderNodeLightPath')
+        node_mix = nodes.new(type='ShaderNodeMixShader')
+        
+        node_bg_camera = nodes.new(type='ShaderNodeBackground')
+        node_bg_camera.inputs[0].default_value = (0.0, 0.0, 0.0, 1.0) # Completely Black
+        
+        # Neutral Gray for ALL rays ensures consistent bounce light for FG/BG passes [cite: 27]
+        node_bg_bounce = nodes.new(type='ShaderNodeBackground')
+        node_bg_bounce.inputs[0].default_value = (0.5, 0.5, 0.5, 1.0) # Neutral Gray Bounce
+        node_bg_bounce.inputs[0].default_value = (0.5, 0.5, 0.5, 1.0) 
         
         node_output = nodes.new(type='ShaderNodeOutputWorld')
         
         links = scene.world.node_tree.links
-        links.new(node_background.outputs[0], node_output.inputs[0])
+        links.new(node_lp.outputs['Is Camera Ray'], node_mix.inputs[0])
+        links.new(node_bg_bounce.outputs[0], node_mix.inputs[1])
+        links.new(node_bg_camera.outputs[0], node_mix.inputs[2])
+        links.new(node_mix.outputs[0], node_output.inputs[0])
+        # Remove the Light Path mix; let the Backdrop object handle the green color [cite: 18]
+        links.new(node_bg_bounce.outputs[0], node_output.inputs[0])
 
-        # 7. Disable Film Transparency to ensure the green background renders
-        scene.render.film_transparent = False
+        # Enable Transparency to ensure Alpha and FG passes work correctly
+        scene.render.film_transparent = True
 
         self.report({'INFO'}, "Greenscreen AI Data Prep settings applied.")
         return {'FINISHED'}
@@ -77,6 +90,16 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
     bl_label = "Setup Render Passes"
     bl_options = {'REGISTER', 'UNDO'}
 
+    def get_layer_collection(self, layer_collection, coll_name):
+        """Recursively find a layer collection by name"""
+        if layer_collection.name == coll_name:
+            return layer_collection
+        for child in layer_collection.children:
+            found = self.get_layer_collection(child, coll_name)
+            if found:
+                return found
+        return None
+
     def execute(self, context):
         scene = context.scene
 
@@ -85,14 +108,51 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
             self.report({'WARNING'}, "Save your .blend file first to enable automatic folder incrementing.")
             return {'CANCELLED'}
         
-        # 1. Ensure View Layers exist for specific passes
-        if "FG" not in scene.view_layers:
-            scene.view_layers.new(name="FG")
-        if "BG" not in scene.view_layers:
-            scene.view_layers.new(name="BG")
+        # 1. Setup View Layers and Visibility Logic
+        view_layer_names = ["ViewLayer", "FG", "BG"]
+        for name in view_layer_names:
+            if name not in scene.view_layers:
+                scene.view_layers.new(name=name)
         
+        fg_coll_name = scene.gs_foreground_coll
+        bg_coll_name = scene.gs_background_coll
+
+        if not fg_coll_name or not bg_coll_name:
+            self.report({'ERROR'}, "Please select both Subject and Environment collections.")
+            return {'CANCELLED'}
+
+        # Configure Visibility for each layer
+        for vl in scene.view_layers:
+            fg_lc = self.get_layer_collection(vl.layer_collection, fg_coll_name)
+            bg_lc = self.get_layer_collection(vl.layer_collection, bg_coll_name)
+            
+            if not fg_lc or not bg_lc: continue
+
+            if vl.name == "ViewLayer": # Input Pass
+                fg_lc.exclude = False
+                bg_lc.exclude = False
+                fg_lc.holdout = False 
+                bg_lc.holdout = False
+                fg_lc.indirect_only = False
+                bg_lc.indirect_only = False
+            
+            elif vl.name == "FG": # FG Pass: Subject on Black
+                fg_lc.exclude = False
+                # Environment is invisible to camera, but provides bounce light [cite: 18, 24]
+                bg_lc.indirect_only = True 
+                fg_lc.holdout = False
+                bg_lc.holdout = False
+                bg_lc.exclude = False
+                
+            elif vl.name == "BG": # BG Pass: Backdrop with Shadow
+                bg_lc.exclude = False
+                # Subject is invisible to camera, but still casts shadows/reflections [cite: 17]
+                fg_lc.indirect_only = True 
+                fg_lc.holdout = False # Fixes the "hole" by not using transparency [cite: 15]
+                fg_lc.exclude = False
+                bg_lc.indirect_only = False
+
         # 2. Access Compositing Node Group (Blender 5.0 API)
-        # The compositor is active if a node group is assigned; use_nodes is deprecated.
         tree = scene.compositing_node_group
         if tree is None:
             # Initialize a new compositor node group and assign it to the scene
@@ -102,6 +162,13 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
         nodes = tree.nodes
         links = tree.links
         nodes.clear()
+        
+        # 2.1 Define Interface Sockets (Blender 5.0 API)
+        tree.interface.clear()
+        tree.interface.new_socket(name="Input", in_out='INPUT', socket_type='NodeSocketColor')
+        tree.interface.new_socket(name="FG", in_out='INPUT', socket_type='NodeSocketColor')
+        tree.interface.new_socket(name="BG", in_out='INPUT', socket_type='NodeSocketColor')
+        tree.interface.new_socket(name="Alpha", in_out='INPUT', socket_type='NodeSocketFloat')
         
         # 3. Create Render Layer Nodes for each pass
         rl_input = nodes.new('CompositorNodeRLayers')
@@ -116,12 +183,30 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
         rl_bg.layer = "BG"
         rl_bg.location = (0, -200)
         
+        # 3.1 Create Alpha Over for FG Pass (Ensures FG is on Black)
+        alpha_over = nodes.new('CompositorNodeAlphaOver')
+        alpha_over.location = (300, 150)
+        alpha_over.inputs[1].default_value = (0, 0, 0, 1) # Black Background
+        links.new(rl_fg.outputs['Alpha'], alpha_over.inputs[0]) # Factor
+        links.new(rl_fg.outputs['Image'], alpha_over.inputs[2]) # Foreground
+        
         # 4. Determine next Clip folder name (Automatic Increment)
         base_dir = os.path.dirname(bpy.data.filepath)
-        clip_index = 1
-        while os.path.exists(os.path.join(base_dir, f"Clip{clip_index:04d}")):
-            clip_index += 1
-        clip_name = f"Clip{clip_index:04d}"
+        target_name = scene.gs_clip_name if scene.gs_clip_name else "Clip0001"
+        clip_name = target_name
+        
+        # If the name follows the Clip#### pattern, increment the number directly
+        if target_name.startswith("Clip") and target_name[4:].isdigit():
+            padding = len(target_name) - 4
+            while os.path.exists(os.path.join(base_dir, clip_name)):
+                num = int(clip_name[4:])
+                clip_name = f"Clip{num + 1:0{padding}d}"
+        else:
+            # Standard suffix increment for custom names
+            clip_index = 1
+            while os.path.exists(os.path.join(base_dir, clip_name)):
+                clip_name = f"{target_name}_{clip_index:02d}"
+                clip_index += 1
         
         # Physically create the directory structure to avoid render errors
         clip_path = os.path.join(base_dir, clip_name)
@@ -131,9 +216,9 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
         # This ensures the OS-level folder structure is respected in 5.0.1
         passes = [
             ("Input", rl_input.outputs['Image'], (600, 400), "RGBA"),
-            ("FG", rl_fg.outputs['Image'], (600, 150), "RGBA"),
+            ("FG", alpha_over.outputs['Image'], (600, 150), "RGBA"),
             ("BG", rl_bg.outputs['Image'], (600, -100), "RGBA"),
-            ("Alpha", rl_input.outputs['Alpha'], (600, -350), "FLOAT")
+            ("Alpha", rl_fg.outputs['Alpha'], (600, -350), "FLOAT")
         ]
 
         for pass_name, output_socket, loc, socket_type in passes:
