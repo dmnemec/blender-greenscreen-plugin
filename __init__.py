@@ -94,11 +94,13 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
         # 2. Enable Compositing Nodes
         scene.use_nodes = True
         
-        # Blender 5.0 API: node_tree is removed from Scene, replaced by compositing_node_group
-        tree = getattr(scene, "compositing_node_group", None)
-        if not tree:
-            self.report({'ERROR'}, "Compositor node group not found. Ensure 'Use Nodes' is enabled.")
-            return {'CANCELLED'}
+        # Blender 5.0 API: node_tree is removed from Scene, replaced by compositing_node_group.
+        # We ensure it is initialized programmatically if use_nodes didn't create it.
+        tree = scene.compositing_node_group
+        if tree is None:
+            # Initialize a new compositor node group and assign it to the scene
+            tree = bpy.data.node_groups.new("CompositingNodeTree", "CompositorNodeTree")
+            scene.compositing_node_group = tree
             
         nodes = tree.nodes
         links = tree.links
