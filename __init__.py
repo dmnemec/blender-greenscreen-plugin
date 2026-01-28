@@ -188,6 +188,13 @@ class GREENSCREEN_PT_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        scene = context.scene
+
+        layout.label(text="Project Configuration")
+        layout.prop(scene, "gs_clip_name")
+        layout.prop_search(scene, "gs_foreground_coll", bpy.data, "collections", text="Subject")
+        layout.prop_search(scene, "gs_background_coll", bpy.data, "collections", text="Environment")
+        layout.separator()
         layout.label(text="Project Initialization")
         layout.operator("greenscreen.setup_project", icon='PREFERENCES')
         layout.separator()
@@ -202,12 +209,31 @@ def register():
     bpy.utils.register_class(GREENSCREEN_OT_setup_passes)
     bpy.utils.register_class(GREENSCREEN_OT_render_clip)
     bpy.utils.register_class(GREENSCREEN_PT_panel)
+    
+    # Register Scene properties for collection selection and clip naming
+    bpy.types.Scene.gs_foreground_coll = bpy.props.StringProperty(
+        name="Subject Collection",
+        description="Collection containing the foreground subject"
+    )
+    bpy.types.Scene.gs_background_coll = bpy.props.StringProperty(
+        name="Environment Collection",
+        description="Collection containing the greenscreen/studio background"
+    )
+    bpy.types.Scene.gs_clip_name = bpy.props.StringProperty(
+        name="Clip Name",
+        description="Name of the export folder",
+        default="Clip0001"
+    )
 
 def unregister():
     bpy.utils.unregister_class(GREENSCREEN_OT_setup)
     bpy.utils.unregister_class(GREENSCREEN_OT_setup_passes)
     bpy.utils.unregister_class(GREENSCREEN_OT_render_clip)
     bpy.utils.unregister_class(GREENSCREEN_PT_panel)
+    
+    del bpy.types.Scene.gs_foreground_coll
+    del bpy.types.Scene.gs_background_coll
+    del bpy.types.Scene.gs_clip_name
 
 if __name__ == "__main__":
     register()
