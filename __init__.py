@@ -20,8 +20,8 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
 
-        # 1. Set Render Engine to Eevee (Optimized for speed in data prep)
-        scene.render.engine = 'BLENDER_EEVEE'
+        # 1. Set Render Engine to Cycles (Required for indirect_only and holdout nuance)
+        scene.render.engine = 'CYCLES'
 
         # 2. Set Frame Range (Exactly 48 frames per styleguide)
         scene.frame_start = 1
@@ -56,17 +56,15 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         nodes = scene.world.node_tree.nodes
         nodes.clear()
         
-        # World Shader Logic: Black for Camera, Gray for Bounce (Neutral Lighting)
+        # World Shader Logic: Black for Camera, Gray for Bounce (Neutral Lighting) [cite: 27]
         node_lp = nodes.new(type='ShaderNodeLightPath')
         node_mix = nodes.new(type='ShaderNodeMixShader')
         
         node_bg_camera = nodes.new(type='ShaderNodeBackground')
         node_bg_camera.inputs[0].default_value = (0.0, 0.0, 0.0, 1.0) # Completely Black
         
-        # Neutral Gray for ALL rays ensures consistent bounce light for FG/BG passes [cite: 27]
         node_bg_bounce = nodes.new(type='ShaderNodeBackground')
-        node_bg_bounce.inputs[0].default_value = (0.5, 0.5, 0.5, 1.0) # Neutral Gray Bounce
-        node_bg_bounce.inputs[0].default_value = (0.5, 0.5, 0.5, 1.0) 
+        node_bg_bounce.inputs[0].default_value = (0.5, 0.5, 0.5, 1.0) # Neutral Gray
         
         node_output = nodes.new(type='ShaderNodeOutputWorld')
         
@@ -75,8 +73,6 @@ class GREENSCREEN_OT_setup(bpy.types.Operator):
         links.new(node_bg_bounce.outputs[0], node_mix.inputs[1])
         links.new(node_bg_camera.outputs[0], node_mix.inputs[2])
         links.new(node_mix.outputs[0], node_output.inputs[0])
-        # Remove the Light Path mix; let the Backdrop object handle the green color [cite: 18]
-        links.new(node_bg_bounce.outputs[0], node_output.inputs[0])
 
         # Enable Transparency to ensure Alpha and FG passes work correctly
         scene.render.film_transparent = True
@@ -131,26 +127,20 @@ class GREENSCREEN_OT_setup_passes(bpy.types.Operator):
             if vl.name == "ViewLayer": # Input Pass
                 fg_lc.exclude = False
                 bg_lc.exclude = False
-                fg_lc.holdout = False 
+                fg_lc.holdout = False
                 bg_lc.holdout = False
-                fg_lc.indirect_only = False
-                bg_lc.indirect_only = False
             
             elif vl.name == "FG": # FG Pass: Subject on Black
                 fg_lc.exclude = False
-                # Environment is invisible to camera, but provides bounce light [cite: 18, 24]
-                bg_lc.indirect_only = True 
+                bg_lc.indirect_only = True
+                bg_lc.holdout = True # Ensure background is hidden from camera
                 fg_lc.holdout = False
-                bg_lc.holdout = False
-                bg_lc.exclude = False
                 
             elif vl.name == "BG": # BG Pass: Backdrop with Shadow
                 bg_lc.exclude = False
-                # Subject is invisible to camera, but still casts shadows/reflections [cite: 17]
-                fg_lc.indirect_only = True 
-                fg_lc.holdout = False # Fixes the "hole" by not using transparency [cite: 15]
-                fg_lc.exclude = False
-                bg_lc.indirect_only = False
+                fg_lc.indirect_only = True
+                fg_lc.holdout = True # Ensure subject is hidden from camera [cite: 15]
+                bg_lc.holdout = False
 
         # 2. Access Compositing Node Group (Blender 5.0 API)
         tree = scene.compositing_node_group
